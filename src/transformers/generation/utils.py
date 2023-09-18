@@ -4387,6 +4387,9 @@ class GenerationMixin:
         )
 
         this_peer_finished = False  # used by synced_gpus only
+        
+        n_accepted_tokens = 0
+        n_drafted_tokens = 0
         while True:
             if synced_gpus:
                 # Under synced_gpus the `forward` call must continue until all gpus complete their sequence.
@@ -4443,6 +4446,7 @@ class GenerationMixin:
                         candidate_input_ids, assistant_model_outputs.logits[:, -1, :]
                     )
                 new_token = assistant_model_outputs.logits[:, -1, :].argmax(dim=-1)
+                n_drafted_tokens +=1
                 candidate_input_ids = torch.cat((candidate_input_ids, new_token[:, None]), dim=-1)
 
                 # 1.3. stop assistant generation on EOS
@@ -4522,6 +4526,8 @@ class GenerationMixin:
             # the assistant forecasted tokens until the first mismatch, or until the max length is reached.
             candidate_new_tokens = candidate_input_ids[:, -candidate_length:]
             n_matches = ((~(candidate_new_tokens == selected_tokens[:, :-1])).cumsum(dim=-1) < 1).sum()
+            
+            n_accepted_tokens += n_matches
 
             # 5. Update variables according to the number of matching assistant tokens. Remember: the token generated
             # by the model after the last candidate match is also valid, as it is generated from a correct sequence.
@@ -4627,6 +4633,10 @@ class GenerationMixin:
 
         if streamer is not None:
             streamer.end()
+        
+        print('n_accepted_tokens', n_accepted_tokens)
+        print('n_drafted_tokens', n_drafted_tokens)
+        print('acceptance rate', n_accepted_tokens/n_drafted_tokens)
 
         if return_dict_in_generate:
             if self.config.is_encoder_decoder:
@@ -4884,7 +4894,9 @@ class GenerationMixin:
                         assistant_model_outputs.logits[:, -1, :] = logits_processor(
                             candidate_input_ids, assistant_model_outputs.logits[:, -1, :]
                         )
-                    new_token = assistant_model_outputs.logits[:, -1, :].argmax(dim=-1)
+                    # sample the token
+                    new_token = torch.multinomial(assistant_model_outputs.logits[:, -1, :].softmax(dim=-1), num_samples=1)
+                        
                     assistant_model_logits.append(assistant_model_outputs.logits[:, -1, :].unsqueeze(1))
                     candidate_input_ids = torch.cat((candidate_input_ids, new_token[:, None]), dim=-1)
                     
